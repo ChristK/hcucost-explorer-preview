@@ -1,0 +1,285 @@
+<!doctype html>
+<!--
+  web/index.html - hcucost web explorer (2026-11-08).
+  A static page: R runs in the visitor's browser with webR (WebAssembly, self-hosted in webr/); the page
+  installs hcucost and its dependencies from repo/ (both built by web/build_wasm.sh) and calls
+  hcu_predict() on the fitted models shipped in the package. Nothing runs on a server: any static
+  host (or `python3 -m http.server`) can serve this folder. sw.js caches the large files (R itself and
+  the packages) for repeat visits. Logic: app.js; R side: hcucost_web.R; styles: style.css.
+-->
+<html lang="en-GB">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Healthcare cost explorer (preview)</title>
+  <meta name="description" content="Expected healthcare use and costs in England from the hcucost models, computed in your browser">
+  <link rel="stylesheet" href="style.css">
+  <meta name="robots" content="noindex, nofollow">
+</head>
+<body>
+  <header class="page-head">
+    <h1>Healthcare use and cost explorer</h1>
+    <p class="lede">The average yearly use of NHS services, and its cost, for people in England with the
+      characteristics you enter, from the <code>hcucost</code> models fitted to CPRD primary care records
+      linked to hospital data. Everything is computed in your browser; nothing you enter leaves this page.</p>
+    <div id="startup" class="startup" aria-live="polite">
+      <div class="bar" aria-hidden="true"><span id="startup-bar"></span></div>
+      <ol class="steps">
+        <li data-step="0">Starting R in your browser</li>
+        <li data-step="1">Installing the R packages</li>
+        <li data-step="2">Reading the models</li>
+        <li data-step="3">First calculation</li>
+      </ol>
+      <p class="hint" id="startup-note">The first visit downloads about 28 MB (R and its packages); later
+        visits reuse most of it from your browser's cache.</p>
+    </div>
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+  </header>
+
+  <main class="layout">
+    <form id="profile" class="panel form" autocomplete="off" aria-label="Profile" novalidate>
+      <label class="compare-toggle"><input type="checkbox" id="compare"> Compare two profiles</label>
+      <div id="tabs" class="tabs" role="tablist" aria-label="Profiles" hidden>
+        <button type="button" role="tab" id="tab-A" aria-selected="true" aria-controls="profile-fields">Profile A</button>
+        <button type="button" role="tab" id="tab-B" aria-selected="false" aria-controls="profile-fields">Profile B</button>
+        <button type="button" id="copy-ab" class="ghost small">Copy A to B</button>
+      </div>
+
+      <div id="profile-fields" role="tabpanel">
+        <fieldset>
+          <legend>Person</legend>
+          <div class="row">
+            <label for="age">Age</label>
+            <input id="age" name="age" type="number" min="20" max="100" step="1" value="60" required aria-describedby="err-age">
+          </div>
+          <p class="field-error" id="err-age"></p>
+          <div class="row">
+            <span class="label" id="sex-label">Sex</span>
+            <div class="seg" role="radiogroup" aria-labelledby="sex-label">
+              <label><input type="radio" name="sex" value="women" checked> Woman</label>
+              <label><input type="radio" name="sex" value="men"> Man</label>
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Also known <span class="hint">(leave as “not known” if not)</span></legend>
+          <div class="row"><label for="dimd">Deprivation (IMD decile)</label><select id="dimd" name="dimd"></select></div>
+          <div class="row"><label for="ethnicity">Ethnicity</label><select id="ethnicity" name="ethnicity"></select></div>
+          <div class="row"><label for="sha">Region</label><select id="sha" name="sha"></select></div>
+          <div class="row"><label for="bmi">BMI (kg/m²)</label>
+            <input id="bmi" name="bmi" type="number" min="12" max="70" step="0.1" placeholder="not known" aria-describedby="err-bmi"></div>
+          <p class="field-error" id="err-bmi"></p>
+          <div class="row"><label for="smok">Smoking</label>
+            <select id="smok" name="smok">
+              <option value="">not known</option><option value="never">never</option>
+              <option value="ex">ex-smoker</option><option value="current">current</option>
+            </select></div>
+          <div class="row"><label for="survival">Survival</label>
+            <select id="survival" name="survival">
+              <option value="">not known</option>
+              <option value="survives">survives this year and next</option>
+              <option value="dies_next">dies next year</option>
+              <option value="died">dies this year</option>
+            </select></div>
+        </fieldset>
+
+        <fieldset>
+          <legend id="cond-legend">Long-term conditions</legend>
+          <div class="seg" role="radiogroup" aria-labelledby="cond-legend">
+            <label><input type="radio" name="condMode" value="unknown" checked> Not known</label>
+            <label><input type="radio" name="condMode" value="none"> None</label>
+            <label><input type="radio" name="condMode" value="choose"> Choose…</label>
+          </div>
+          <div id="ncond-row" class="row">
+            <label for="ncond">Number of conditions <span class="hint">(if known)</span></label>
+            <input id="ncond" name="ncond" type="number" min="0" max="26" step="1" placeholder="not known" aria-describedby="err-ncond">
+          </div>
+          <p class="field-error" id="err-ncond"></p>
+          <div id="choose-box" hidden>
+            <input type="search" id="cond-search" placeholder="Search the 26 conditions" aria-label="Search the conditions">
+            <p class="hint" id="chosen-summary" aria-live="polite"></p>
+            <div id="cond-list" class="cond-list"></div>
+            <p class="field-error" id="err-conds"></p>
+            <div class="row"><label for="others">The other conditions are</label>
+              <select id="others" name="others">
+                <option value="absent">absent</option>
+                <option value="unknown">not known</option>
+              </select></div>
+            <p class="hint">Years since diagnosis: 0 means diagnosed this year; leave blank if not known. For
+              asthma, anxiety or depression, chronic pain, constipation and alcohol problems, the years into the
+              current spell.</p>
+          </div>
+        </fieldset>
+      </div>
+
+      <details class="advanced">
+        <summary>Advanced settings</summary>
+        <div class="row">
+          <span class="label" id="period-label">Model</span>
+          <div class="seg" role="radiogroup" aria-labelledby="period-label">
+            <label><input type="radio" name="period" value="CY" checked> Calendar year</label>
+            <label><input type="radio" name="period" value="FY"> Financial year</label>
+          </div>
+        </div>
+        <div class="row"><label for="precision">Precision</label>
+          <select id="precision" name="precision">
+            <option value="fast">Fast</option>
+            <option value="standard" selected>Standard</option>
+            <option value="precise">Precise (slower)</option>
+          </select></div>
+        <p class="hint">Precision matters mostly when details are not known and are averaged over people like
+          this. Results update as you edit.</p>
+      </details>
+
+      <button type="submit" id="go" class="primary" disabled>Update</button>
+    </form>
+
+    <section id="results" class="panel results" aria-label="Results">
+      <div id="placeholder" class="placeholder">Results appear here once R has started.</div>
+      <div id="out" hidden>
+        <div id="knows"></div>
+        <div class="hero" id="hero"></div>
+
+        <div class="spread-wrap">
+          <h2>How much people like this differ</h2>
+          <p class="hint">The average above includes everyone like this. Individual costs are very uneven: most
+            people use a little care and a few are admitted to hospital. From <span id="spread-n">4,000</span>
+            simulated people:</p>
+          <div id="spread" class="spread"></div>
+        </div>
+
+        <div id="tables"></div>
+
+        <div class="chart-head">
+          <h2 id="chart-title">Average cost by age</h2>
+          <div class="chart-tools">
+            <button type="button" id="toggle-table" class="ghost small" aria-pressed="false">Show table</button>
+          </div>
+        </div>
+        <p class="hint" id="curve-note">The same profile at ages 20 to 95. Hover over, tap or tab to a column for
+          its details (arrow keys move between ages).</p>
+        <div id="legend" class="legend"></div>
+        <div id="chart" class="chart"></div>
+        <div id="chart-table" class="chart-table" hidden></div>
+        <div id="tooltip" class="tooltip" role="status" hidden></div>
+
+        <div class="share">
+          <button type="button" id="copy-link" class="ghost small">Copy a link to these results</button>
+          <button type="button" id="download-csv" class="ghost small">Download the results (CSV)</button>
+          <span class="hint" id="share-note" aria-live="polite"></span>
+        </div>
+
+        <details class="about">
+          <summary>About these figures</summary>
+          <ul>
+            <li><strong>What they are.</strong> The average yearly use of NHS services, and its cost, for people
+              in England with the characteristics entered: an average over everyone like this, including people
+              who use no care that year. They are not a prediction for one person and should not be used for
+              decisions about anyone's care.</li>
+            <li><strong>Services.</strong> Primary care contacts, prescription items, outpatient attendances,
+              hospital admissions (inpatient spells) and A&amp;E attendances. Other services, such as community
+              and social care, are not included.</li>
+            <li><strong>Costs.</strong> NHS costs at 2019/20 prices: primary care contacts at PSSRU-based costs
+              per contact; prescriptions at the Prescription Cost Analysis net ingredient cost per item; hospital
+              activity at the national schedules of NHS costs.</li>
+            <li><strong>Data.</strong> CPRD Aurum primary care records of people aged 20 to 100, linked to
+              Hospital Episode Statistics, 2013 to 2019; practice patterns of 2019 (calendar year) or 2019/20
+              (financial year).</li>
+            <li><strong>Details not known.</strong> If exactly the known details match one of the models fitted
+              without the others, that model is used. Otherwise the unknown details are averaged over people
+              like this, filled in from how characteristics and conditions occur together. An unknown
+              survival is averaged over the risk of death.</li>
+            <li><strong>Calculation.</strong> The averages are computed without simulation (the expected use
+              is exact; the expected cost is computed to the precision shown). The spread comes from simulated
+              people. Results are reproducible: the same profile always gives the same figures.</li>
+            <li><strong>Privacy.</strong> R runs in your browser and nothing you enter is sent anywhere. A copied
+              link contains the profiles entered.</li>
+          </ul>
+        </details>
+        <p class="foot" id="foot"></p>
+      </div>
+    </section>
+  </main>
+
+  <div id="mobile-bar" class="mobile-bar" hidden>
+    <button type="button" id="bar-result" class="bar-result"></button>
+    <button type="button" id="bar-edit" class="ghost small">Edit profile</button>
+  </div>
+
+  <footer class="page-foot">
+    <p>Proof of concept. Predictions of the hcucost models; R runs in the browser through
+      <a href="https://docs.r-wasm.org/webr/latest/">webR</a>.</p>
+  </footer>
+<!--
+  web/deploy/gate.html - the password gate of the PREVIEW of the hcucost web explorer (2026-11-08; user
+  request: "very simple" protection while the page is being finalised; to be removed later).
+  encrypt.mjs inserts it into the preview's index.html in place of <script src="app.js">. The page's code
+  (app.js) and its R side (hcucost_web.R) are published only encrypted (AES-GCM; key from the password by
+  PBKDF2-SHA-256). The password decrypts them in the browser; nothing is sent anywhere. Not strong
+  security: webR and the R packages themselves are public files.
+-->
+<div id="gate" class="gate" role="dialog" aria-modal="true" aria-labelledby="gate-title">
+  <form id="gate-form" class="gate-box" autocomplete="on">
+    <h2 id="gate-title">Preview</h2>
+    <p>This preview of the hcucost web explorer is password-protected while it is being finalised.</p>
+    <label for="gate-pw">Password</label>
+    <input id="gate-pw" name="password" type="password" autocomplete="current-password" required>
+    <label class="gate-remember"><input type="checkbox" id="gate-remember"> Remember on this device</label>
+    <button type="submit" class="primary">Open</button>
+    <p id="gate-msg" class="gate-msg" role="alert"></p>
+  </form>
+</div>
+<style>
+  .gate { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px;
+    background: var(--page); }
+  .gate-box { width: min(380px, 100%); background: var(--surface); border: 1px solid var(--ring); border-radius: 12px;
+    padding: 20px; display: grid; gap: 10px; }
+  .gate-box h2 { margin: 0; font-size: 1.2rem; }
+  .gate-box p { margin: 0; color: var(--ink-2); font-size: 0.92rem; }
+  .gate-box input[type="password"] { font: inherit; color: var(--ink); background: var(--page); border: 1px solid var(--axis);
+    border-radius: 8px; padding: 8px 10px; }
+  .gate-remember { display: flex; gap: 8px; align-items: center; font-size: 0.9rem; color: var(--ink-2); }
+  .gate-msg { color: #d03b3b; min-height: 1.2em; }
+</style>
+<script type="module">
+  const KEY = 'hcucost-preview-password';
+  const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+  async function deriveKey(pw, salt, iter) {
+    const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(pw), 'PBKDF2', false, ['deriveKey']);
+    return crypto.subtle.deriveKey({ name: 'PBKDF2', salt, iterations: iter, hash: 'SHA-256' }, base,
+      { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  }
+  // decrypt app.js and hcucost_web.R with the password and run the app; throws on a wrong password
+  async function unlock(pw) {
+    const [app, r] = await Promise.all(['app.js.enc', 'hcucost_web.R.enc'].map((f) => fetch(f).then((x) => x.json())));
+    const key = await deriveKey(pw, b64(app.salt), app.iter);
+    const dec = async (e) => new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64(e.iv) }, key, b64(e.ct)));
+    const src = await dec(app);
+    window.HCUWEB_R_CODE = await dec(r);
+    // the app is run from a blob: its relative import of webR must become absolute
+    const code = src.replace("from './webr/webr.mjs'", `from '${new URL('webr/webr.mjs', window.location.href).href}'`);
+    document.getElementById('gate').remove();
+    await import(URL.createObjectURL(new Blob([code], { type: 'text/javascript' })));
+  }
+  const saved = sessionStorage.getItem(KEY) || localStorage.getItem(KEY);
+  const form = document.getElementById('gate-form');
+  const msg = document.getElementById('gate-msg');
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const pw = document.getElementById('gate-pw').value;
+    msg.textContent = 'Checking…';
+    try {
+      await unlock(pw);
+      sessionStorage.setItem(KEY, pw);
+      if (document.getElementById('gate-remember').checked) localStorage.setItem(KEY, pw);
+    } catch (e) {
+      msg.textContent = 'That password is not right.';
+    }
+  });
+  if (saved) unlock(saved).catch(() => { sessionStorage.removeItem(KEY); localStorage.removeItem(KEY); });
+  else document.getElementById('gate-pw').focus();
+</script>
+
+</body>
+</html>

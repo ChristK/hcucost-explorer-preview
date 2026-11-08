@@ -1,0 +1,45 @@
+Package: Rcpp
+Version: 1.1.2
+Depends: R (>= 3.5.0)
+Imports: methods, utils
+Suggests: tinytest, inline, rbenchmark, pkgKitten (>= 0.1.2)
+License: GPL (>= 2)
+MD5sum: 8bd684a7371ad3ee690e210fce82c219
+Built: R 4.6.0; wasm32-unknown-emscripten; 2026-10-11 03:48:28 UTC;
+        unix
+File: Rcpp_1.1.2.tgz
+
+Package: data.table
+Version: 1.18.6.1
+Depends: R (>= 3.4.0)
+Imports: methods
+Suggests: bit64 (>= 4.0.0), bit (>= 4.0.4), R.utils (>= 2.13.0), xts,
+        zoo (>= 1.8-1), yaml, knitr, markdown
+License: MPL-2.0 | file LICENSE
+MD5sum: 721dcdc909555a9697efa874013cbbd9
+Built: R 4.6.0; wasm32-unknown-emscripten; 2026-10-09 15:59:41 UTC;
+        unix
+File: data.table_1.18.6.1.tgz
+
+Package: hcucost
+Version: 0.0.0.9000
+Depends: R (>= 4.4.0)
+Imports: data.table (>= 1.15.0), jsonlite, Rcpp (>= 1.0.12), splines,
+        stats, tools, utils
+LinkingTo: BH (>= 1.84.0), Rcpp
+Suggests: codetools, knitr, rmarkdown, tinytest (>= 1.4.1)
+License: GPL (>= 3)
+MD5sum: 7f99054d1688209e253fc63fc685cd89
+Built: R 4.6.0; wasm32-unknown-emscripten; 2026-11-08 17:41:34 UTC;
+        unix
+File: hcucost_0.0.0.9000.tgz
+
+Package: jsonlite
+Version: 2.0.0
+Depends: methods
+Suggests: httr, vctrs, testthat, knitr, rmarkdown, R.rsp, sf
+License: MIT + file LICENSE
+MD5sum: 4c4a5b39fdf8d03ea1d194080827352e
+Built: R 4.6.0; wasm32-unknown-emscripten; 2026-05-13 09:48:20 UTC;
+        unix
+File: jsonlite_2.0.0.tgz
